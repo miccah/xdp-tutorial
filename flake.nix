@@ -13,8 +13,27 @@
     };
   in {
     devShells.${system}.default = pkgs.mkShell {
+      # Disable hardening flags baked into the wrapped compiler.
+      hardeningDisable = [ "all" ];
+      # Suppress target bpf warnings from the wrapped compiler.
+      # (The compiler still outputs bpf code).
+      NIX_CC_WRAPPER_SUPPRESS_TARGET_WARNING = "1";
+      # Use multi.dev include for gnu/stubs-32.h and disable the
+      # unused-driver-arg diagnostic from the wrapped compiler.
+      NIX_CFLAGS_COMPILE = "-idirafter ${pkgs.glibc_multi.dev}/include -Wno-unused-command-line-argument";
       packages = with pkgs; [
         # Add packages here.
+        clang
+        llvm
+        elfutils
+        libpcap
+        m4
+        perf
+        gnumake
+        linuxHeaders
+        bpftools
+        tcpdump
+        pkg-config
       ];
     };
   };
