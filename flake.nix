@@ -34,6 +34,7 @@
         bpftools
         tcpdump
         pkg-config
+        xdp-tools
       ];
     };
   };
