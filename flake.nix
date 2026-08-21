@@ -11,6 +11,9 @@
     pkgs = import nixpkgs {
       inherit system;
     };
+    testHelper = pkgs.writeShellScriptBin "t" ''
+      sudo bash /home/xdp/xdp/xdp-tutorial/testenv/testenv.sh "$@"
+    '';
   in {
     devShells.${system}.default = pkgs.mkShell {
       # Disable hardening flags baked into the wrapped compiler.
@@ -35,6 +38,8 @@
         tcpdump
         pkg-config
         xdp-tools
+        ethtool
+        testHelper
       ];
     };
   };
