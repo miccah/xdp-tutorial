@@ -6,6 +6,7 @@ Notes for [xdp-tutorial](https://github.com/xdp-project/xdp-tutorial).
 * [Introduction](#introduction)
 * [Setup Dependencies](#setup-dependencies)
 * [Basic01: loading your first BPF program](#basic01-loading-your-first-bpf-program)
+* [Basic02: loading a program by name](#basic02-loading-a-program-by-name)
 
 
 ## Introduction
@@ -169,4 +170,124 @@ sudo ./xdp_pass_user --dev lo -U 896
 
 # unload all
 sudo ./xdp_pass_user --dev lo --unload-all
+```
+
+
+## Basic02: loading a program by name
+
+A BPF ELF file can contain more than one XDP program, and the **libxdp** API
+can be used to select which one.
+
+### Setting up the test lab
+
+I added `t` as a program in my nix flake:
+
+```nix
+testHelper = pkgs.writeShellScriptBin "t" ''
+  sudo bash /home/xdp/xdp/xdp-tutorial/testenv/testenv.sh "$@"
+'';
+```
+
+```bash
+# setup the virtual interface
+t setup --name veth-basic02
+
+# view
+t status
+ip link show veth-basic02
+ip addr show veth-basic02
+
+# remove
+t teardown --name veth-basic02
+```
+
+My machine has IP address `fc00:dead:cafe:1::1` and apparently there is a peer
+at `fc00:dead:cafe:1::2`.
+
+```bash
+ping -c4 fc00:dead:cafe:1::2
+```
+
+### Loading a program by name
+
+This seems to be the part in `xdp_loader.c` that loads the program by name. We
+initialize `xdp_opts` with the `DECLARE_LIBXDP_OPTS` macro before passing it to
+`xdp_program__create`
+
+```c
+DECLARE_LIBXDP_OPTS(xdp_program_opts, xdp_opts,
+		    .obj = obj,
+		    .prog_name = cfg.progname);
+struct xdp_program *prog = xdp_program__create(&xdp_opts);
+```
+
+Side note: I could not find docs on `xdp_program__create`. Not in `man libxdp`
+and not on the Internet. Maybe it just passes through to a BPF program create
+function.
+
+Anyway, once it's built, we can load XDP programs by name using the custom
+`xdp_loader` program.
+
+```bash
+sudo ./xdp_loader --help
+sudo ./xdp_loader --dev veth-basic02
+sudo ./xdp_loader --dev veth-basic02 --unload-all
+sudo ./xdp_loader --dev veth-basic02 --progname xdp_drop_func
+sudo ./xdp_loader --dev veth-basic02 --progname xdp_pass_func
+```
+
+Loading `xdp_drop_func` causes the `ping` to timeout!
+
+
+### veth packet directions
+
+> When you load an XDP program on the interface visible on your host machine,
+> it will operate on all packets arriving to that interface. And since packets
+> that are sent from one interface in a veth pair will arrive at the other end,
+> the packets that your XDP program will see are the ones sent from within the
+> network namespace (netns). This means that when you are testing, you should
+> do the ping from within the network namespace that were created by the
+> script.
+>
+> You can “enter” the namespace manually (via `sudo ip netns exec veth-basic02
+> /bin/bash`)
+
+I'm not sure I understand this section, mostly because `ping` from "outside"
+the namespace works as expected. It responds and drops packets the way I would
+expect when certain programs are loaded. Maybe it "works" because the ping goes
+through fine, but on the way out it gets dropped?
+
+
+### Add xdp_abort program
+
+This seems pretty straightforward:
+
+```c
+SEC("xdp")
+int xdp_abort_func(struct xdp_md *ctx)
+{
+	return XDP_ABORTED;
+}
+```
+
+```bash
+# load program by name
+sudo ./xdp_loader --dev veth-basic02 --progname xdp_abort_func
+
+# note that ping fails
+ping -c4 fc00:dead:cafe:1::2
+```
+
+`XDP_ABORTED` is different from `XDP_DROP` in that it triggers the tracepoint
+named `xdp:xdp_exception`. You can see this happening with `perf`:
+
+```bash
+sudo perf record -a -e xdp:xdp_exception sleep 4 &
+ping -c2 fc00:dead:cafe:1::2
+sudo perf script
+```
+
+```
+ping   48888 [008] 27127.497657: xdp:xdp_exception: prog_id=1073 action=ABORTED ifindex=4
+ping   48888 [008] 27128.546514: xdp:xdp_exception: prog_id=1073 action=ABORTED ifindex=4
 ```
