@@ -201,11 +201,34 @@ ip addr show veth-basic02
 t teardown --name veth-basic02
 ```
 
-My machine has IP address `fc00:dead:cafe:1::1` and apparently there is a peer
-at `fc00:dead:cafe:1::2`.
+This creates a **network namespace**, which is a completely isolated networking
+context. It has its own independent interfaces, routing table, ARP table,
+firewall rules, sockets, etc.
+
+The **network namespace** is connected via a **veth pair**, which is an
+interface on the host and an interface within the namespace. This allows
+routing packets between them.
+
+```
+     HOST namespace                          veth-basic02 namespace
+   ┌──────────────────┐                     ┌──────────────────┐
+   │                  │                     │                  │
+   │  [veth-basic02]  │═════ virtual ══════ │   [peer NIC]     │
+   │   IP ...1::1     │       cable         │   IP ...1::2     │
+   │  (XDP here)      │                     │                  │
+   └──────────────────┘                     └──────────────────┘
+```
+
+The "peer" here is the independent networking stack running on the same
+machine.
 
 ```bash
+# from the host
 ping -c4 fc00:dead:cafe:1::2
+
+# run commands from the network namespace
+sudo ip netns exec veth-basic02 ping -c4 fc00:dead:cafe:1::1
+sudo ip netns exec veth-basic02 zsh
 ```
 
 ### Loading a program by name
@@ -234,6 +257,8 @@ sudo ./xdp_loader --dev veth-basic02
 sudo ./xdp_loader --dev veth-basic02 --unload-all
 sudo ./xdp_loader --dev veth-basic02 --progname xdp_drop_func
 sudo ./xdp_loader --dev veth-basic02 --progname xdp_pass_func
+
+sudo xdp-loader status veth-basic02
 ```
 
 Loading `xdp_drop_func` causes the `ping` to timeout!
@@ -248,14 +273,13 @@ Loading `xdp_drop_func` causes the `ping` to timeout!
 > network namespace (netns). This means that when you are testing, you should
 > do the ping from within the network namespace that were created by the
 > script.
->
-> You can “enter” the namespace manually (via `sudo ip netns exec veth-basic02
-> /bin/bash`)
 
-I'm not sure I understand this section, mostly because `ping` from "outside"
-the namespace works as expected. It responds and drops packets the way I would
-expect when certain programs are loaded. Maybe it "works" because the ping goes
-through fine, but on the way out it gets dropped?
+The important takeaway here is that XDP programs operate on *received* packets.
+It does not filter egress.
+
+For `ping` it is hard to tell the difference because it looks the same when
+request packets are dropped vs response packets, but maybe this is important
+for later experiments.
 
 
 ### Add xdp_abort program
@@ -283,7 +307,7 @@ named `xdp:xdp_exception`. You can see this happening with `perf`:
 
 ```bash
 sudo perf record -a -e xdp:xdp_exception sleep 4 &
-ping -c2 fc00:dead:cafe:1::2
+sudo ip netns exec veth-basic02 ping -c2 fc00:dead:cafe:1::1
 sudo perf script
 ```
 
